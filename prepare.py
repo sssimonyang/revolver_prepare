@@ -97,17 +97,13 @@ def process_single_patient(patient_id='GWZY026',
                            driver_genes=None):
     cluster = pd.read_csv(f"./{patient_id}/tables/cluster.tsv", sep='\t')
     loci = pd.read_csv(f"./{patient_id}/tables/loci.tsv", sep='\t')
-    patient_id = patient_id.replace('-', '_')
 
     loci.drop(['variant_allele_frequency', 'cellular_prevalence_std'],
               axis=1,
               inplace=True)
 
     samples = loci["sample_id"].unique()
-    samples_map = {
-        f'R' + str(i + 1): sample
-        for i, sample in enumerate(samples)
-    }
+    samples_map = {f'R{i+1:02}': sample for i, sample in enumerate(samples)}
 
     def concat_ccf_value(x):
         # lambda x: ';'.join([i + ':' + str(
@@ -224,7 +220,7 @@ def process_single_patient(patient_id='GWZY026',
 
 
 def parse_concat_ccf(ccf):
-    return [float(i[3:]) for i in ccf.split(';')]
+    return [float(i[4:]) for i in ccf.split(';')]
 
 
 def analyse_cluster(patient_id, result, min_cluster_ccf):
@@ -265,7 +261,7 @@ def analyse_cluster(patient_id, result, min_cluster_ccf):
 
 
 @batch_split
-def process_all_patients(path,
+def process_all_patients(paths,
                          min_cluster_size=10,
                          min_mutation_ccf=0.1,
                          min_cluster_ccf=0.1,
@@ -276,71 +272,77 @@ def process_all_patients(path,
         f'This run parameter min_cluster_size = {min_cluster_size} min_mutation_ccf = {min_mutation_ccf} min_cluster_ccf = {min_cluster_ccf}'
     )
 
-    os.chdir(path)
     dfs = []
     max_cluster_infos = []
-
+    all_patients = []
     samples_infos = []
     cluster_infos = []
     # meaningful_mutations = get_meaningful_mutations(
     #     '/public/home/wupin/project/1-liver-cancer/3-pyclone/mut-in-exonic-non-syn/1-MET-cohort/all_mutation_and_gene_from_exonic.txt')
     meaningful_mutations = None
-    patients = os.listdir()
     if problem_remove:
         problem_patients = ['GWZY072']
     else:
         problem_patients = []
 
-    for patient in patients:
-        if 'tables' not in os.listdir(os.path.join(path, patient)):
-            continue
-        if len(os.listdir(os.path.join(path, patient, 'tables'))) != 2:
-            continue
-        if patient in problem_patients:
-            continue
-        df, clonal_cluster, samples_map, cluster_mean_max = process_single_patient(
-            patient_id=patient,
-            meaningful_mutations=meaningful_mutations,
-            min_cluster_size=min_cluster_size,
-            min_mutation_ccf=min_mutation_ccf,
-            driver_genes=driver_genes)
-        df, cluster_info, removed_cluster = analyse_cluster(
-            patient_id=patient, result=df, min_cluster_ccf=min_cluster_ccf)
+    for path in paths:
+        os.chdir(path)
+        patients = os.listdir()
 
-        dfs.append(df)
+        for patient in patients:
+            if 'tables' not in os.listdir(os.path.join(path, patient)):
+                continue
+            if len(os.listdir(os.path.join(path, patient, 'tables'))) != 2:
+                continue
+            if patient in problem_patients:
+                continue
+            all_patients.append(patient)
+            df, clonal_cluster, samples_map, cluster_mean_max = process_single_patient(
+                patient_id=patient,
+                meaningful_mutations=meaningful_mutations,
+                min_cluster_size=min_cluster_size,
+                min_mutation_ccf=min_mutation_ccf,
+                driver_genes=driver_genes)
+            df, cluster_info, removed_cluster = analyse_cluster(
+                patient_id=patient, result=df, min_cluster_ccf=min_cluster_ccf)
 
-        max_cluster_info = [[
-            patient, clonal_cluster, *cluster_mean_max, removed_cluster,
-            *cluster_info[clonal_cluster][12:]
-        ]]
-        max_cluster_infos.append(
-            pd.DataFrame(max_cluster_info,
-                         columns=[
-                             'patientID', 'clonal_cluster',
-                             'max_cluster_before', 'mean_value_before',
-                             'count_before', 'max_cluster_after',
-                             'mean_value_after', 'count_after',
-                             'removed_cluster', *samples_map.keys()
-                         ]))
+            dfs.append(df)
 
-        samples_info = [[patient, region, "_".join(sample.split("_")[1:4:2])]
-                        for region, sample in samples_map.items()]
-        samples_infos.append(
-            pd.DataFrame(samples_info,
-                         columns=['patientID', 'region', 'sample']))
+            max_cluster_info = [[
+                patient, clonal_cluster, *cluster_mean_max, removed_cluster,
+                *cluster_info[clonal_cluster][12:]
+            ]]
+            max_cluster_infos.append(
+                pd.DataFrame(max_cluster_info,
+                             columns=[
+                                 'patientID', 'clonal_cluster',
+                                 'max_cluster_before', 'mean_value_before',
+                                 'count_before', 'max_cluster_after',
+                                 'mean_value_after', 'count_after',
+                                 'removed_cluster', *samples_map.keys()
+                             ]))
 
-        cluster_info = [[patient, cluster, *info]
-                        for cluster, info in cluster_info.items()]
+            samples_info = [[
+                patient, region, "_".join(sample.split("_")[1:4:2])
+            ] for region, sample in samples_map.items()]
+            samples_infos.append(
+                pd.DataFrame(samples_info,
+                             columns=['patientID', 'region', 'sample']))
 
-        sig_columns = [(i + '_count', i + '_prop')
-                       for i in ['C_A', 'C_G', 'C_T', 'T_A', 'T_C', 'T_G']]
-        sig_columns = [i for j in sig_columns for i in j]
-        cluster_infos.append(
-            pd.DataFrame(cluster_info,
-                         columns=[
-                             'patientID', 'cluster', *sig_columns,
-                             *samples_map.keys()
-                         ]))
+            cluster_info = [[patient, cluster, *info]
+                            for cluster, info in cluster_info.items()]
+
+            sig_columns = [(i + '_count', i + '_prop')
+                           for i in ['C_A', 'C_G', 'C_T', 'T_A', 'T_C', 'T_G']]
+            sig_columns = [i for j in sig_columns for i in j]
+            cluster_infos.append(
+                pd.DataFrame(cluster_info,
+                             columns=[
+                                 'patientID', 'cluster', *sig_columns,
+                                 *samples_map.keys()
+                             ]))
+
+    os.chdir(curdir)
 
     dfs = pd.concat(dfs, join='outer')
     dfs['is.driver'] = False
@@ -359,12 +361,6 @@ def process_all_patients(path,
     cluster_infos = pd.concat(cluster_infos, join='outer', sort=False)
     cluster_infos.sort_values(['patientID', 'cluster'], inplace=True)
 
-    os.chdir(curdir)
-    if not os.path.exists(
-            f'{min_cluster_size}_{min_mutation_ccf}_{min_cluster_ccf}'):
-        os.mkdir(f'{min_cluster_size}_{min_mutation_ccf}_{min_cluster_ccf}')
-        os.chdir(f'{min_cluster_size}_{min_mutation_ccf}_{min_cluster_ccf}')
-
     cluster_infos.to_csv(
         f'cluster_info_{min_cluster_size}_{min_mutation_ccf}_{min_cluster_ccf}.csv',
         index=False)
@@ -379,7 +375,7 @@ def process_all_patients(path,
         max_cluster_infos['min_clonal_ccf'] <= min_cluster_ccf,
         'patientID'].to_list()
     print(
-        f'we have n_patients = {len(patients)} jump {problem_patients} remove {remove_patients} and {list(set(patients) - set(problem_patients) - set(remove_patients))} are left\n'
+        f'we jump {problem_patients} have n_patients = {len(all_patients)} remove {remove_patients} and {list(set(all_patients) - set(remove_patients))} are left\n'
     )
     dfs = dfs[~dfs['patientID'].isin(remove_patients)]
 
@@ -416,16 +412,20 @@ def process_all_patients(path,
             out = dfs[~dfs.patientID.isin(patients_has_no_drivers)]
         else:
             out = dfs
+        out.to_csv(
+            f'python_{min_cluster_size}_{min_mutation_ccf}_{min_cluster_ccf}_{driver_cut}_{drivers_num}_driver_genes.csv',
+            index=False)
         out['is.clonal'] = out['is.clonal'].replace([True, False],
                                                     ['TRUE', 'FALSE'])
         out['is.driver'] = out['is.driver'].replace([True, False],
                                                     ['TRUE', 'FALSE'])
+        out['patientID'] = out['patientID'].str.replace("-", "_")
         out = out[[
             'Misc', 'patientID', 'variantID', 'cluster', 'is.driver',
             'is.clonal', 'CCF'
         ]]
         out.to_csv(
-            f'CCF_{min_cluster_size}_{min_mutation_ccf}_{min_cluster_ccf}_{driver_cut}_{drivers_num}_driver_genes.csv',
+            f'R_{min_cluster_size}_{min_mutation_ccf}_{min_cluster_ccf}_{driver_cut}_{drivers_num}_driver_genes.csv',
             index=False)
 
     for driver_cut in [driver_genes]:
@@ -436,30 +436,65 @@ def process_all_patients(path,
 
 
 def main():
-    # path = "/public/home/wupin/project/1-liver-cancer/landscape-figure/for-jky/4-pyclone-results-based-on-patient"
-    path = "/public/home/wupin/project/1-liver-cancer/landscape-figure/2-somatic-new-label/4-pyclone-results"
-    driver_genes = ['TP53', 'ARID1A', 'RB1', 'PTEN', 'CTNNB1', 'ALB', 'AXIN1']
-    # min_cluster_size=10; min_mutation_ccf=0.1; min_cluster_ccf=0.1;
-    # driver_genes = [transform_name_to_id(i) for i in driver_genes]
-    # driver_genes = ['ENSG00000141510',
-    #                 'ENSG00000117713',
-    #                 'ENSG00000139687',
-    #                 'ENSG00000171862',
-    #                 'ENSG00000168036',
-    #                 'ENSG00000163631',
-    #                 'ENSG00000103126']
+    patient_level = False
+    tumor_level = True
+    only_driver_genes = True
+    problem_remove = False
 
-    # process_all_patients(path, min_cluster_size=20, min_mutation_ccf=0.2, min_cluster_ccf=0.1,
-    #                      driver_genes=driver_genes, problem_remove=True)
+    if only_driver_genes:
+        driver_genes = [
+            'TP53', 'ARID1A', 'RB1', 'PTEN', 'CTNNB1', 'ALB', 'AXIN1'
+        ]
+        # driver_genes = [transform_name_to_id(i) for i in driver_genes]
+        # driver_genes = ['ENSG00000141510',
+        #                 'ENSG00000117713',
+        #                 'ENSG00000139687',
+        #                 'ENSG00000171862',
+        #                 'ENSG00000168036',
+        #                 'ENSG00000163631',
+        #                 'ENSG00000103126']
+    else:
+        driver_genes = None
 
-    from itertools import product
-    for i, j, k in product([5, 10, 15, 20], [0.1, 0.2], [0.1, 0.2]):
-        process_all_patients(path,
-                             min_cluster_size=i,
-                             min_mutation_ccf=j,
-                             min_cluster_ccf=k,
+    if patient_level:
+        workdir = f"patient_level_{str(len(driver_genes))+'_drivers' if isinstance(driver_genes,list) else 'no_driver_specfied'}_{'problem_remove' if problem_remove else 'whole'}"
+        if not os.path.exists(workdir):
+            os.mkdir(workdir)
+        os.chdir(workdir)
+        paths = [
+            "/public/home/wupin/project/1-liver-cancer/landscape-figure/for-jky/4-pyclone-results-based-on-patient"
+        ]
+        process_all_patients(paths,
+                             min_cluster_size=10,
+                             min_mutation_ccf=0.1,
+                             min_cluster_ccf=0.1,
                              driver_genes=driver_genes,
-                             problem_remove=False)
+                             problem_remove=problem_remove)
+    if tumor_level:
+        workdir = f"tumor_level_{str(len(driver_genes))+'_drivers' if isinstance(driver_genes,list) else 'no_driver_specfied'}_{'problem_remove' if problem_remove else 'whole'}"
+        if not os.path.exists(workdir):
+            os.mkdir(workdir)
+        os.chdir(workdir)
+        paths = [
+            "/public/home/wupin/project/1-liver-cancer/landscape-figure/2-somatic-new-label/4-pyclone-results",
+            "/public/home/wupin/project/1-liver-cancer/landscape-figure/2-somatic-new-label/RT-node/4-pyclone-results",
+            "/public/home/wupin/project/1-liver-cancer/landscape-figure/2-somatic-new-label/GWZY020-met-node/4-pyclone-results"
+        ]
+        process_all_patients(paths,
+                             min_cluster_size=10,
+                             min_mutation_ccf=0.1,
+                             min_cluster_ccf=0.1,
+                             driver_genes=driver_genes,
+                             problem_remove=problem_remove)
+
+    # from itertools import product
+    # for i, j, k in product([5, 10, 15, 20], [0.1, 0.2], [0.1, 0.2]):
+    #     process_all_patients(paths,
+    #                          min_cluster_size=i,
+    #                          min_mutation_ccf=j,
+    #                          min_cluster_ccf=k,
+    #                          driver_genes=driver_genes,
+    #                          problem_remove=False)
 
 
 if __name__ == '__main__':
