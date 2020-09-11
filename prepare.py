@@ -281,7 +281,10 @@ def process_all_patients(paths,
     #     '/public/home/wupin/project/1-liver-cancer/3-pyclone/mut-in-exonic-non-syn/1-MET-cohort/all_mutation_and_gene_from_exonic.txt')
     meaningful_mutations = None
     if problem_remove:
-        problem_patients = ['GWZY072']
+        problem_patients = [
+            'GWZY072', 'GWZY048_PT_S2010-27295', 'GWZY100_PT_S2013-08183',
+            'GWZY121_PT_S2013-35637'
+        ]
     else:
         problem_patients = []
 
@@ -409,17 +412,21 @@ def process_all_patients(paths,
             print(
                 f'under driver_cut = {driver_cut} and patients with no drivers {patients_has_no_drivers}'
             )
-            out = dfs[~dfs.patientID.isin(patients_has_no_drivers)]
+            out = dfs.loc[~dfs.patientID.isin(patients_has_no_drivers), :]
         else:
             out = dfs
         out.to_csv(
             f'python_{min_cluster_size}_{min_mutation_ccf}_{min_cluster_ccf}_{driver_cut}_{drivers_num}_driver_genes.csv',
             index=False)
-        out['is.clonal'] = out['is.clonal'].replace([True, False],
-                                                    ['TRUE', 'FALSE'])
-        out['is.driver'] = out['is.driver'].replace([True, False],
-                                                    ['TRUE', 'FALSE'])
-        out['patientID'] = out['patientID'].str.replace("-", "_")
+        out.loc[:,
+                'is.clonal'] = out.loc[:,
+                                       'is.clonal'].replace([True, False],
+                                                            ['TRUE', 'FALSE'])
+        out.loc[:,
+                'is.driver'] = out.loc[:,
+                                       'is.driver'].replace([True, False],
+                                                            ['TRUE', 'FALSE'])
+        out.loc[:, 'patientID'] = out.loc[:, 'patientID'].str.replace("-", "_")
         out = out[[
             'Misc', 'patientID', 'variantID', 'cluster', 'is.driver',
             'is.clonal', 'CCF'
@@ -436,10 +443,10 @@ def process_all_patients(paths,
 
 
 def main():
-    patient_level = False
+    patient_level = True
     tumor_level = True
     only_driver_genes = True
-    problem_remove = False
+    problem_remove = True
 
     if only_driver_genes:
         driver_genes = [
@@ -455,7 +462,7 @@ def main():
         #                 'ENSG00000103126']
     else:
         driver_genes = None
-
+    curdir = os.path.abspath(os.curdir)
     if patient_level:
         workdir = f"patient_level_{str(len(driver_genes))+'_drivers' if isinstance(driver_genes,list) else 'no_driver_specfied'}_{'problem_remove' if problem_remove else 'whole'}"
         if not os.path.exists(workdir):
@@ -466,10 +473,11 @@ def main():
         ]
         process_all_patients(paths,
                              min_cluster_size=10,
-                             min_mutation_ccf=0.1,
-                             min_cluster_ccf=0.1,
+                             min_mutation_ccf=0.2,
+                             min_cluster_ccf=0.2,
                              driver_genes=driver_genes,
                              problem_remove=problem_remove)
+        os.chdir(curdir)
     if tumor_level:
         workdir = f"tumor_level_{str(len(driver_genes))+'_drivers' if isinstance(driver_genes,list) else 'no_driver_specfied'}_{'problem_remove' if problem_remove else 'whole'}"
         if not os.path.exists(workdir):
@@ -482,11 +490,11 @@ def main():
         ]
         process_all_patients(paths,
                              min_cluster_size=10,
-                             min_mutation_ccf=0.1,
-                             min_cluster_ccf=0.1,
+                             min_mutation_ccf=0.2,
+                             min_cluster_ccf=0.2,
                              driver_genes=driver_genes,
                              problem_remove=problem_remove)
-
+        os.chdir(curdir)
     # from itertools import product
     # for i, j, k in product([5, 10, 15, 20], [0.1, 0.2], [0.1, 0.2]):
     #     process_all_patients(paths,
