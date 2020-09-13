@@ -27,14 +27,16 @@ def batch_split(func):
 def main():
     patient_level = True
     tumor_level = True
+    sample_split = False
+    final_type_split = True
 
-    problem_remove = True
+    problem_remove = False
     driver = ['TP53', 'ARID1A', 'RB1', 'PTEN', 'CTNNB1', 'ALB', 'AXIN1']
 
     curdir = os.path.abspath(os.curdir)
 
     if patient_level:
-        workdir = f"patient_level_{str(len(driver)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'whole'}"
+        workdir = f"patient_level_{str(len(driver)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'whole'}_{'sample_split' if sample_split else 'patient_whole'}"
         if not os.path.exists(workdir):
             os.mkdir(workdir)
         os.chdir(workdir)
@@ -44,23 +46,29 @@ def main():
         ccf = CCF(paths,
                   level='patient_level',
                   driver=driver,
-                  problem_remove=problem_remove)
+                  problem_remove=problem_remove,
+                  sample_split=sample_split,
+                  final_type_split=final_type_split)
         ccf.main()
         os.chdir(curdir)
+
     if tumor_level:
-        workdir = f"tumor_level_{str(len(driver)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'whole'}"
+        workdir = f"tumor_level_{str(len(driver)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'whole'}_{'sample_split' if sample_split else 'patient_whole'}"
         if not os.path.exists(workdir):
             os.mkdir(workdir)
         os.chdir(workdir)
         paths = [
             "/public/home/wupin/project/1-liver-cancer/landscape-figure/2-somatic-new-label/4-pyclone-results",
             "/public/home/wupin/project/1-liver-cancer/landscape-figure/2-somatic-new-label/RT-node/4-pyclone-results",
-            "/public/home/wupin/project/1-liver-cancer/landscape-figure/2-somatic-new-label/GWZY020-met-node/4-pyclone-results"
+            "/public/home/wupin/project/1-liver-cancer/landscape-figure/2-somatic-new-label/GWZY020-met-node/4-pyclone-results",
+            "/public/home/wupin/project/1-liver-cancer/landscape-figure/5-within-liver-pyclone/3-pyclone-results"
         ]
         ccf = CCF(paths,
                   level='tumor_level',
                   driver=driver,
-                  problem_remove=problem_remove)
+                  problem_remove=problem_remove,
+                  sample_split=sample_split,
+                  final_type_split=final_type_split)
         ccf.main()
         os.chdir(curdir)
 
@@ -76,6 +84,8 @@ class CCF:
                  level,
                  driver=None,
                  problem_remove=True,
+                 sample_split=False,
+                 final_type_split=False,
                  min_cluster_size=10,
                  min_mutation_ccf=0.1,
                  min_cluster_ccf=0.1):
@@ -92,11 +102,16 @@ class CCF:
         self.problem_remove = problem_remove
         if self.problem_remove:
             self.problem_patients = [
-                'GWZY072', 'GWZY048_PT_S2010-27295', 'GWZY100_PT_S2013-08183',
-                'GWZY121_PT_S2013-35637'
+                'GWZY072', 'GWZY048_PT', 'GWZY100_PT', 'GWZY121_PT'
             ]
         else:
             self.problem_patients = []
+
+        self.sample_split = sample_split
+        self.final_type_split = final_type_split
+
+        if self.level == 'patient_level' and (not self.sample_split):
+            self.final_type_split = False
 
         self.min_cluster_size = min_cluster_size
         self.min_mutation_ccf = min_mutation_ccf
@@ -107,7 +122,7 @@ class CCF:
         self.samples_info_dfs = []
         self.cluster_info_dfs = []
         self.patient_info_dfs = []
-        self.fetch_gene = CCF.get_info_from_gtf('fetch_gene_name')
+        self.fetch_gene = self.__class__.get_info_from_gtf('fetch_gene_name')
 
         self.current_patient = None
 
@@ -116,10 +131,10 @@ class CCF:
         curdir = os.path.abspath(os.curdir)
         print(
             f'This run parameter ',
-            f'level = {self.level} problem_remove = {self.problem_remove} problem patients = {self.problem_patients}',
+            f'level = {self.level} sample split = {self.sample_split} problem_remove = {self.problem_remove} problem patients = {self.problem_patients}',
             f'min_cluster_size = {self.min_cluster_size} min_mutation_ccf = {self.min_mutation_ccf} min_cluster_ccf = {self.min_cluster_ccf}',
             f'driver genes = {self.driver_genes}',
-            end='\n')
+            sep='\n')
         for path in self.paths:
             os.chdir(path)
             patients = os.listdir()
@@ -129,18 +144,31 @@ class CCF:
                     continue
                 if len(os.listdir(os.path.join(path, patient, 'tables'))) != 2:
                     continue
+                loci = pd.read_csv(f"./{patient}/tables/loci.tsv", sep='\t')
+                patient = self.__class__.name_transform(patient)
                 if patient in self.problem_patients:
                     continue
-                loci = pd.read_csv(f"./{patient}/tables/loci.tsv", sep='\t')
                 loci.drop(
                     ['variant_allele_frequency', 'cellular_prevalence_std'],
                     axis=1,
                     inplace=True)
-                self.current_patient = patient
-                self.single_patient(loci)
-                self.processed_patients.append(patient)
+
+                if self.sample_split:
+                    for name, index in loci.groupby(
+                            'sample_id').groups.items():
+                        self.current_patient = self.__class__.name_transform(
+                            name)
+                        current_loci = loci.loc[index, :]
+                        self.single_patient(current_loci)
+                        self.processed_patients.append(self.current_patient)
+
+                else:
+                    self.current_patient = patient
+                    self.single_patient(loci)
+                    self.processed_patients.append(self.current_patient)
 
         os.chdir(curdir)
+        print(f'Processed {self.processed_patients}')
         self.combine()
 
     def single_patient(self, loci):
@@ -151,7 +179,7 @@ class CCF:
         cluster_info_df = pd.DataFrame(cluster_info_df,
                                        columns=[
                                            'patientID', 'cluster',
-                                           *CCF.sig_columns,
+                                           *self.__class__.sig_columns,
                                            *samples_map.keys()
                                        ])
         cluster_info_df['cluster_mean_ccf'] = cluster_info_df.loc[:,
@@ -166,10 +194,10 @@ class CCF:
             cluster_info_df['cluster_mean_ccf'].idxmax(),
             samples_map.keys()]
         remove_regions = clonal_cluster_ccf[
-            clonal_cluster_ccf <= self.min_cluster_ccf].index.to_list()
+            clonal_cluster_ccf <= self.min_cluster_ccf].index.tolist()
         if remove_regions:
             print(
-                f"patient {self.current_patient} clonal cluster CCF {clonal_cluster_ccf.to_list()} remove {remove_regions} rerun"
+                f"patient {self.current_patient} clonal cluster CCF {clonal_cluster_ccf.tolist()} remove {remove_regions} rerun"
             )
             remove_samples = [samples_map[i] for i in remove_regions]
             loci = loci[~loci["sample_id"].isin(remove_samples)]
@@ -297,8 +325,8 @@ class CCF:
                 mutation_sig.counts)
             mutation_sig['prop'] = mutation_sig['prop'].round(decimals=2)
             mutation_sig = [
-                i for j in zip(mutation_sig['counts'].to_list(),
-                               mutation_sig['prop'].to_list()) for i in j
+                i for j in zip(mutation_sig['counts'].tolist(),
+                               mutation_sig['prop'].tolist()) for i in j
             ]
             cluster_infos[i] = [*mutation_sig, *median_cluster_ccf]
         removed_cluster = self.value_to_str(removed_cluster)
@@ -343,9 +371,15 @@ class CCF:
 
         df['cluster'] = df['cluster'].astype(str)
         assert df.groupby('patientID')['is.clonal'].any().all()
+        if self.final_type_split:
+            df['category'] = df['patientID'].apply(
+                lambda x: re.search(r'_(RT|PT|.*M)\d?', x).group(1))
+            df['category'] = df['category'].str.replace('.*M', "M")
+            for name, index in df.groupby('category').groups.items():
+                self.to_ccf_csv(df.loc[index, :].copy(), category=name)
         self.to_ccf_csv(df)
 
-    def to_ccf_csv(self, df):
+    def to_ccf_csv(self, df, category='None'):
         df['is.driver'] = False
         if self.sepcified_driver:
             driver_gene_part = df[df['gene'].isin(self.driver_genes)]
@@ -366,14 +400,14 @@ class CCF:
             ~patients_has_no_drivers].index.tolist()
         if patients_has_no_drivers:
             print(
-                f"Under driver_cut = {'list' if self.sepcified_driver else str(self.driver_cut)} and patients with no drivers {patients_has_no_drivers}"
+                f"Under category = {category} driver_cut = {'list' if self.sepcified_driver else str(self.driver_cut)} and patients with no drivers {patients_has_no_drivers}"
             )
             out = df.loc[~df.patientID.isin(patients_has_no_drivers), :]
         else:
             out = df
         out = out.copy()
         out.to_csv(
-            f"python_{self.min_cluster_size}_{self.min_mutation_ccf}_{self.min_cluster_ccf}_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.csv",
+            f"python_{self.min_cluster_size}_{self.min_mutation_ccf}_{self.min_cluster_ccf}_{category}_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.csv",
             index=False)
         out.loc[:,
                 'is.clonal'] = out.loc[:,
@@ -383,14 +417,24 @@ class CCF:
                 'is.driver'] = out.loc[:,
                                        'is.driver'].replace([True, False],
                                                             ['TRUE', 'FALSE'])
-        out.loc[:, 'patientID'] = out.loc[:, 'patientID'].str.replace("-", "_")
+
         out = out[[
             'Misc', 'patientID', 'variantID', 'cluster', 'is.driver',
             'is.clonal', 'CCF'
         ]]
         out.to_csv(
-            f"R_{self.min_cluster_size}_{self.min_mutation_ccf}_{self.min_cluster_ccf}_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.csv",
+            f"R_{self.min_cluster_size}_{self.min_mutation_ccf}_{self.min_cluster_ccf}_{category}_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.csv",
             index=False)
+
+    @staticmethod
+    def name_transform(name):
+        names = np.array(name.split('_'))
+        if names.shape[0] >= 4:
+            return '_'.join(names[[0, 1, 3]].tolist())
+        if names.shape[0] >= 2:
+            return '_'.join(names[[0, 1]].tolist())
+        if names.shape[0] == 1:
+            return name
 
     @staticmethod
     def concat_ccf_value(samples_map):
