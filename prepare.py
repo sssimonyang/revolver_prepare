@@ -26,17 +26,18 @@ def batch_split(func):
 
 def main():
     patient_level = True
-    tumor_level = True
+    tumor_level = False
     sample_split = False
     final_type_split = True
 
-    problem_remove = False
+    problem_remove = True
     driver = ['TP53', 'ARID1A', 'RB1', 'PTEN', 'CTNNB1', 'ALB', 'AXIN1']
+    cnv_arms = ['+1q', '+8q', '-4q', '-8p', '-16q']
 
     curdir = os.path.abspath(os.curdir)
 
     if patient_level:
-        workdir = f"patient_level_{str(len(driver)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'whole'}_{'sample_split' if sample_split else 'patient_whole'}"
+        workdir = f"patient_level_{str(len(driver)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'problem_remain'}_{'sample_split' if sample_split else 'sample_not_split'}"
         if not os.path.exists(workdir):
             os.mkdir(workdir)
         os.chdir(workdir)
@@ -46,6 +47,7 @@ def main():
         ccf = CCF(paths,
                   level='patient_level',
                   driver=driver,
+                  cnv_arms=cnv_arms,
                   problem_remove=problem_remove,
                   sample_split=sample_split,
                   final_type_split=final_type_split)
@@ -53,7 +55,7 @@ def main():
         os.chdir(curdir)
 
     if tumor_level:
-        workdir = f"tumor_level_{str(len(driver)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'whole'}_{'sample_split' if sample_split else 'patient_whole'}"
+        workdir = f"tumor_level_{str(len(driver)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'problem_remain'}_{'sample_split' if sample_split else 'sample_not_split'}"
         if not os.path.exists(workdir):
             os.mkdir(workdir)
         os.chdir(workdir)
@@ -66,6 +68,7 @@ def main():
         ccf = CCF(paths,
                   level='tumor_level',
                   driver=driver,
+                  cnv_arms=cnv_arms,
                   problem_remove=problem_remove,
                   sample_split=sample_split,
                   final_type_split=final_type_split)
@@ -75,6 +78,7 @@ def main():
 
 class CCF:
     gtf_file = "/public/home/wangzj/yangjk/Homo_sapiens_GRCh37_87_geneonly.gtf"
+    cnv_file = "/public/home/wupin/Gistic-analysis/2-MET-cohort-all-samples-new_label-float_ploidy/4-GISTIC-results-center/2-based-on-sample/2-all-samples-in-MET-cohort/broad_values_by_arm.txt"
     sig_columns = [(i + '_count', i + '_prop')
                    for i in ['C_A', 'C_G', 'C_T', 'T_A', 'T_C', 'T_G']]
     sig_columns = [i for j in sig_columns for i in j]
@@ -83,6 +87,7 @@ class CCF:
                  paths,
                  level,
                  driver=None,
+                 cnv_arms=None,
                  problem_remove=True,
                  sample_split=False,
                  final_type_split=False,
@@ -92,9 +97,19 @@ class CCF:
         self.paths = paths
         self.level = level
         self.driver = driver
+        self.cnv_arms = cnv_arms
+        if self.cnv_arms:
+            self.cnv_data = pd.read_csv(self.__class__.cnv_file, sep='\t')
+            self.cnv_data.set_index("Chromosome Arm", inplace=True)
+            amp_cnv = self.cnv_data >= 0.5
+            amp_cnv.index = '+' + amp_cnv.index
+            del_cnv = self.cnv_data <= -0.5
+            del_cnv.index = '-' + del_cnv.index
+            self.cnv_data = pd.concat([amp_cnv, del_cnv])
+
         if isinstance(self.driver, list):
             self.sepcified_driver = True
-            self.driver_genes = self.driver
+            self.driver_genes = self.driver + self.cnv_arms
         elif isinstance(self.driver, int):
             self.sepcified_driver = False
             self.driver_cut = self.driver
@@ -102,7 +117,8 @@ class CCF:
         self.problem_remove = problem_remove
         if self.problem_remove:
             self.problem_patients = [
-                'GWZY072', 'GWZY048_PT', 'GWZY100_PT', 'GWZY121_PT'
+                'GWZY072', 'GWZY048_PT', 'GWZY100_PT', 'GWZY121_PT',
+                'GWZY913925_PT1', ''
             ]
         else:
             self.problem_patients = []
@@ -162,10 +178,10 @@ class CCF:
                         self.single_patient(current_loci)
                         self.processed_patients.append(self.current_patient)
 
-                else:
-                    self.current_patient = patient
-                    self.single_patient(loci)
-                    self.processed_patients.append(self.current_patient)
+                self.sample_split = False
+                self.current_patient = patient
+                self.single_patient(loci)
+                self.processed_patients.append(self.current_patient)
 
         os.chdir(curdir)
         print(f'Processed {self.processed_patients}')
@@ -226,6 +242,81 @@ class CCF:
                                            *samples_map.keys()
                                        ])
         self.patient_info_dfs.append(patient_info_df)
+
+        if self.cnv_arms:
+            samples_map = {
+                i: '_'.join(j.split('_')[:4])
+                for i, j in samples_map.items()
+            }
+            patient_cnv = self.cnv_data.loc[self.cnv_arms,
+                                            samples_map.values()].copy()
+            patient_cnv['count'] = np.sum(patient_cnv[samples_map.values()],
+                                          axis=1)
+            for arm, value in patient_cnv.iterrows():
+                if value['count'] == len(samples_map):
+                    value = ";".join([
+                        f'{sample}:{round(ccf,2)}' for sample, ccf in zip(
+                            samples_map.keys(), clonal_cluster_ccf)
+                    ])
+                    df = df.append(
+                        {
+                            "Misc": arm,
+                            'variantID': arm,
+                            'gene': arm,
+                            'cluster': clonal_cluster,
+                            'CCF': value
+                        },
+                        ignore_index=True)
+                else:
+                    value = value[list(samples_map.values())]
+                    temp_map = {j: i for i, j in samples_map.items()}
+                    value.index = [temp_map[i] for i in value.index]
+                    value = value.astype(bool)
+
+                    amp_samples = value[value].index.tolist()
+                    if not amp_samples:
+                        continue
+
+                    not_amp_samples = value[~value].index.tolist()
+                    amp_ccf = cluster_info_df.loc[:, [
+                        'cluster', *samples_map.keys()
+                    ]].copy()
+                    amp_ccf['not_amp_sample'] = (
+                        amp_ccf.loc[:, not_amp_samples] <
+                        self.min_cluster_ccf).all(axis=1)
+                    amp_ccf['amp_sample'] = (amp_ccf.loc[:, amp_samples] >
+                                             self.min_cluster_ccf).all(axis=1)
+                    amp_ccf = amp_ccf[(amp_ccf['not_amp_sample'])
+                                      & (amp_ccf['amp_sample'])]
+
+                    if amp_ccf.empty:
+                        print(
+                            f'patient {self.current_patient} {arm} amp_samples {amp_samples} don\'t have proper cluster'
+                        )
+                        continue
+                    amp_ccf[
+                        'amp_sample_mean_ccf'] = amp_ccf.loc[:,
+                                                             amp_samples].mean(
+                                                                 axis=1)
+                    amp_cluster = amp_ccf.loc[
+                        amp_ccf['amp_sample_mean_ccf'].idxmax(),
+                        ['cluster']].values[0]
+                    amp_cluster_ccf = amp_ccf.loc[
+                        amp_ccf['amp_sample_mean_ccf'].idxmax(),
+                        samples_map.keys()]
+                    value = ";".join([
+                        f'{sample}:{round(ccf,2)}' for sample, ccf in zip(
+                            samples_map.keys(), amp_cluster_ccf)
+                    ])
+                    df = df.append(
+                        {
+                            "Misc": arm,
+                            'variantID': arm,
+                            'gene': arm,
+                            'cluster': amp_cluster,
+                            'CCF': value
+                        },
+                        ignore_index=True)
 
         df['patientID'] = self.current_patient
         df['is.clonal'] = False
@@ -371,6 +462,9 @@ class CCF:
 
         df['cluster'] = df['cluster'].astype(str)
         assert df.groupby('patientID')['is.clonal'].any().all()
+
+        df.reset_index(drop=True, inplace=True)
+
         if self.final_type_split:
             df['category'] = df['patientID'].apply(
                 lambda x: re.search(r'_(RT|PT|.*M)\d?', x).group(1))
