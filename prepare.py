@@ -25,8 +25,8 @@ def batch_split(func):
 
 
 def main():
-    patient_level = True
-    tumor_level = False
+    patient_level = False
+    tumor_level = True
     sample_split = False
     final_type_split = True
 
@@ -118,7 +118,7 @@ class CCF:
         if self.problem_remove:
             self.problem_patients = [
                 'GWZY072', 'GWZY048_PT', 'GWZY100_PT', 'GWZY121_PT',
-                'GWZY913925_PT1', ''
+                'GWZY913925_PT1'
             ]
         else:
             self.problem_patients = []
@@ -243,11 +243,13 @@ class CCF:
                                        ])
         self.patient_info_dfs.append(patient_info_df)
 
-        if self.cnv_arms:
-            samples_map = {
-                i: '_'.join(j.split('_')[:4])
-                for i, j in samples_map.items()
-            }
+        samples_map = {
+            i: '_'.join(j.split('_')[:4])
+            for i, j in samples_map.items()
+        }
+
+        if self.cnv_arms and not (set(samples_map.values()) -
+                                  set(self.cnv_data.columns)):
             patient_cnv = self.cnv_data.loc[self.cnv_arms,
                                             samples_map.values()].copy()
             patient_cnv['count'] = np.sum(patient_cnv[samples_map.values()],
@@ -291,7 +293,7 @@ class CCF:
 
                     if amp_ccf.empty:
                         print(
-                            f'patient {self.current_patient} {arm} amp_samples {amp_samples} don\'t have proper cluster'
+                            f'{self.current_patient} {arm} amp_samples {amp_samples} don\'t have proper cluster'
                         )
                         continue
                     amp_ccf[
@@ -317,6 +319,12 @@ class CCF:
                             'CCF': value
                         },
                         ignore_index=True)
+        elif self.cnv_arms:
+            print(
+                f'{self.current_patient} samples {list(samples_map.values())} not all in cnv data'
+            )
+        else:
+            pass
 
         df['patientID'] = self.current_patient
         df['is.clonal'] = False
