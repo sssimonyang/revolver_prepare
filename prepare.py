@@ -25,7 +25,7 @@ def batch_split(func):
 
 
 def main():
-    patient_level = False
+    patient_level = True
     tumor_level = True
     sample_split = False
     final_type_split = True
@@ -42,7 +42,8 @@ def main():
             os.mkdir(workdir)
         os.chdir(workdir)
         paths = [
-            "/public/home/wupin/project/1-liver-cancer/landscape-figure/for-jky/4-pyclone-results-based-on-patient"
+            "/public/home/wupin/project/1-liver-cancer/landscape-figure/for-jky/4-pyclone-results-based-on-patient",
+            "/public/home/wupin/project/1-liver-cancer/landscape-figure/5-within-liver-pyclone/pyclone-patient-level/3-pyclone-results"
         ]
         ccf = CCF(paths,
                   level='patient_level',
@@ -78,7 +79,8 @@ def main():
 
 class CCF:
     gtf_file = "/public/home/wangzj/yangjk/Homo_sapiens_GRCh37_87_geneonly.gtf"
-    cnv_file = "/public/home/wupin/Gistic-analysis/2-MET-cohort-all-samples-new_label-float_ploidy/4-GISTIC-results-center/2-based-on-sample/2-all-samples-in-MET-cohort/broad_values_by_arm.txt"
+    # cnv_file = "/public/home/wupin/Gistic-analysis/2-MET-cohort-all-samples-new_label-float_ploidy/4-GISTIC-results-center/2-based-on-sample/2-all-samples-in-MET-cohort/broad_values_by_arm.txt"
+    cnv_file = "/public/home/wupin/Gistic-analysis/2-MET-cohort-all-samples-new_label-float_ploidy/4-GISTIC-results-center/2-based-on-sample/1-all-sample-in-three-cohort/broad_values_by_arm.txt"
     sig_columns = [(i + '_count', i + '_prop')
                    for i in ['C_A', 'C_G', 'C_T', 'T_A', 'T_C', 'T_G']]
     sig_columns = [i for j in sig_columns for i in j]
@@ -117,14 +119,19 @@ class CCF:
         self.problem_remove = problem_remove
         if self.problem_remove:
             self.problem_patients = [
-                'GWZY072', 'GWZY048_PT', 'GWZY100_PT', 'GWZY121_PT',
-                'GWZY913925_PT1'
+                'GWZY072',
+                'GWZY858729',
+                'GWZY048_PT',
+                'GWZY100_PT',
+                'GWZY121_PT',
+                'GWZY913925_PT1',
             ]
         else:
             self.problem_patients = []
 
         self.sample_split = sample_split
         self.final_type_split = final_type_split
+        self.remove_unuseful_cluster = True
 
         if self.level == 'patient_level' and (not self.sample_split):
             self.final_type_split = False
@@ -507,6 +514,14 @@ class CCF:
             out = df.loc[~df.patientID.isin(patients_has_no_drivers), :]
         else:
             out = df
+        if self.remove_unuseful_cluster:
+            reserve = out.groupby([
+                'patientID', 'cluster'
+            ]).apply(lambda x: x['is.driver'].any() or x['is.clonal'].all())
+            out.set_index(['patientID', 'cluster'], inplace=True)
+            out = out.loc[reserve[reserve].index, :]
+            out.reset_index(inplace=True)
+
         out = out.copy()
         out.to_csv(
             f"python_{self.min_cluster_size}_{self.min_mutation_ccf}_{self.min_cluster_ccf}_{category}_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.csv",
