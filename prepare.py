@@ -25,14 +25,18 @@ def batch_split(func):
 
 
 def main():
-    patient_level = True
+    patient_level = False
     tumor_level = True
     sample_split = False
     final_type_split = True
 
     problem_remove = True
     driver = ['TP53', 'ARID1A', 'RB1', 'PTEN', 'CTNNB1', 'ALB', 'AXIN1']
+    # driver = 2
     cnv_arms = ['+1q', '+8q', '-4q', '-8p', '-16q']
+    # cnv_arms = [
+    #     '+2p', '+2q', '-11p', '+5q', '+7p', '+6p', '-15q', '+5p', '-21p'
+    # ]
 
     curdir = os.path.abspath(os.curdir)
 
@@ -93,9 +97,11 @@ class CCF:
                  problem_remove=True,
                  sample_split=False,
                  final_type_split=False,
+                 remove_unuseful_cluster=True,
                  min_cluster_size=10,
                  min_mutation_ccf=0.1,
-                 min_cluster_ccf=0.1):
+                 min_cluster_ccf=0.1,
+                 cnv_cut_value=0.5):
         self.paths = paths
         self.level = level
         self.driver = driver
@@ -103,9 +109,9 @@ class CCF:
         if self.cnv_arms:
             self.cnv_data = pd.read_csv(self.__class__.cnv_file, sep='\t')
             self.cnv_data.set_index("Chromosome Arm", inplace=True)
-            amp_cnv = self.cnv_data >= 0.5
+            amp_cnv = self.cnv_data >= cnv_cut_value
             amp_cnv.index = '+' + amp_cnv.index
-            del_cnv = self.cnv_data <= -0.5
+            del_cnv = self.cnv_data <= -cnv_cut_value
             del_cnv.index = '-' + del_cnv.index
             self.cnv_data = pd.concat([amp_cnv, del_cnv])
 
@@ -131,7 +137,7 @@ class CCF:
 
         self.sample_split = sample_split
         self.final_type_split = final_type_split
-        self.remove_unuseful_cluster = True
+        self.remove_unuseful_cluster = remove_unuseful_cluster
 
         if self.level == 'patient_level' and (not self.sample_split):
             self.final_type_split = False
@@ -154,9 +160,9 @@ class CCF:
         curdir = os.path.abspath(os.curdir)
         print(
             f'This run parameter ',
-            f'level = {self.level} sample split = {self.sample_split} problem_remove = {self.problem_remove} problem patients = {self.problem_patients}',
+            f'level = {self.level} sample split = {self.sample_split} problem remove = {self.problem_remove} problem patients = {self.problem_patients}',
             f'min_cluster_size = {self.min_cluster_size} min_mutation_ccf = {self.min_mutation_ccf} min_cluster_ccf = {self.min_cluster_ccf}',
-            f'driver genes = {self.driver_genes}',
+            f'specified driver {self.driver_genes if self.sepcified_driver else self.driver_cut}',
             sep='\n')
         for path in self.paths:
             os.chdir(path)
@@ -182,20 +188,27 @@ class CCF:
                         self.current_patient = self.__class__.name_transform(
                             name)
                         current_loci = loci.loc[index, :]
-                        self.single_patient(current_loci)
+                        samples_map = {f'R{1:02}': name}
+                        self.single_patient(current_loci, samples_map)
                         self.processed_patients.append(self.current_patient)
-
-                self.sample_split = False
-                self.current_patient = patient
-                self.single_patient(loci)
-                self.processed_patients.append(self.current_patient)
+                else:
+                    self.current_patient = patient
+                    samples = loci["sample_id"].unique()
+                    samples_map = {
+                        f'R{i+1:02}': sample
+                        for i, sample in enumerate(samples)
+                    }
+                    self.single_patient(loci, samples_map)
+                    self.processed_patients.append(self.current_patient)
 
         os.chdir(curdir)
         print(f'Processed {self.processed_patients}')
         self.combine()
 
-    def single_patient(self, loci):
-        df, samples_map = self.single(loci=loci)
+    def single_patient(self, loci, samples_map):
+        df = self.single(loci=loci, samples_map=samples_map)
+        if df.empty:
+            return
         df, cluster_info, removed_cluster = self.analyse_cluster(df)
         cluster_info_df = [[self.current_patient, cluster, *info]
                            for cluster, info in cluster_info.items()]
@@ -225,7 +238,10 @@ class CCF:
             remove_samples = [samples_map[i] for i in remove_regions]
             loci = loci[~loci["sample_id"].isin(remove_samples)]
             self.current_patient = f"{self.current_patient}_remove_{'_'.join(remove_regions)}"
-            self.single_patient(loci)
+            for i in remove_regions:
+                del samples_map[i]
+            if samples_map:
+                self.single_patient(loci, samples_map)
             return
         if removed_cluster:
             print(f'{self.current_patient} remove clusters {removed_cluster}')
@@ -340,13 +356,7 @@ class CCF:
         self.dfs.append(df)
         return
 
-    def single(self, loci):
-        samples = loci["sample_id"].unique()
-        samples_map = {
-            f'R{i+1:02}': sample
-            for i, sample in enumerate(samples)
-        }
-
+    def single(self, loci, samples_map):
         cluster_id = loci.groupby('mutation_id')['cluster_id'].first()
         ccf_value = loci.groupby('mutation_id').apply(
             self.concat_ccf_value(samples_map))
@@ -403,7 +413,7 @@ class CCF:
                         f'{self.current_patient}-{i}' for i in modify_variants
                     ],
                                                           sep='-')
-        return result, samples_map
+        return result
 
     def analyse_cluster(self, result):
         cluster_infos = {}
@@ -440,6 +450,9 @@ class CCF:
         return result, cluster_infos, removed_cluster
 
     def combine(self):
+        if not self.dfs:
+            print('no content write out')
+            return
         df = pd.concat(self.dfs, join='outer')
         df['variantID'] = df['variantID'].fillna('non_coding_region')
         df['is.driver'] = False
