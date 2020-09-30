@@ -29,19 +29,21 @@ def main():
     tumor_level = True
     sample_split = False
     final_type_split = True
-
     problem_remove = True
+    remove_unuseful_cluster = False
+
     driver = ['TP53', 'ARID1A', 'RB1', 'PTEN', 'CTNNB1', 'ALB', 'AXIN1']
     # driver = 2
     cnv_arms = ['+1q', '+8q', '-4q', '-8p', '-16q']
     # cnv_arms = [
-    #     '+2p', '+2q', '-11p', '+5q', '+7p', '+6p', '-15q', '+5p', '-21p'
+    #     '+1q', '+8q', '-4q', '-8p', '-16q', '+2p', '+2q', '-11p', '+5q', '+7p',
+    #     '+6p', '-15q', '+5p', '-21p'
     # ]
 
     curdir = os.path.abspath(os.curdir)
 
     if patient_level:
-        workdir = f"patient_level_{str(len(driver)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'problem_remain'}_{'sample_split' if sample_split else 'sample_not_split'}"
+        workdir = f"patient_level_{str(len(driver)+len(cnv_arms)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'problem_remain'}_{'sample_split' if sample_split else 'sample_not_split'}"
         if not os.path.exists(workdir):
             os.mkdir(workdir)
         os.chdir(workdir)
@@ -55,12 +57,13 @@ def main():
                   cnv_arms=cnv_arms,
                   problem_remove=problem_remove,
                   sample_split=sample_split,
-                  final_type_split=final_type_split)
+                  final_type_split=final_type_split,
+                  remove_unuseful_cluster=remove_unuseful_cluster)
         ccf.main()
         os.chdir(curdir)
 
     if tumor_level:
-        workdir = f"tumor_level_{str(len(driver)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'problem_remain'}_{'sample_split' if sample_split else 'sample_not_split'}"
+        workdir = f"tumor_level_{str(len(driver)+len(cnv_arms)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'problem_remain'}_{'sample_split' if sample_split else 'sample_not_split'}"
         if not os.path.exists(workdir):
             os.mkdir(workdir)
         os.chdir(workdir)
@@ -76,7 +79,8 @@ def main():
                   cnv_arms=cnv_arms,
                   problem_remove=problem_remove,
                   sample_split=sample_split,
-                  final_type_split=final_type_split)
+                  final_type_split=final_type_split,
+                  remove_unuseful_cluster=remove_unuseful_cluster)
         ccf.main()
         os.chdir(curdir)
 
@@ -130,7 +134,7 @@ class CCF:
                 'GWZY048_PT',
                 'GWZY100_PT',
                 'GWZY121_PT',
-                'GWZY913925_PT1',
+                'GWZY913925_PT1'  # , 'GWZY054_PT1'
             ]
         else:
             self.problem_patients = []
@@ -536,9 +540,40 @@ class CCF:
             out.reset_index(inplace=True)
 
         out = out.copy()
+
         out.to_csv(
             f"python_{self.min_cluster_size}_{self.min_mutation_ccf}_{self.min_cluster_ccf}_{category}_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.csv",
             index=False)
+
+        df = out[out['is.driver']]
+        max_column = df.groupby('patientID')['variantID'].nunique().max()
+        results = []
+        for patient, index in df.groupby('patientID').groups.items():
+            result = [patient]
+            temp = df.loc[index, 'variantID'].unique().tolist()
+            temp.sort()
+            result.extend(temp)
+            result.extend(
+                [np.nan for _ in range(max_column - len(result) + 1)])
+            results.append(result)
+
+        results = pd.DataFrame(results)
+        results.to_csv(
+            f"adjacency_list_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.tsv",
+            sep='\t',
+            index=False,
+            header=False)
+        with open(
+                f"adjacency_list_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.tsv",
+                'r') as f:
+            lines = f.readlines()
+            end = lines[0][-1]
+            lines = [line.strip() + end for line in lines]
+        with open(
+                f"adjacency_list_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.tsv",
+                'w') as f:
+            f.writelines(lines)
+
         out.loc[:,
                 'is.clonal'] = out.loc[:,
                                        'is.clonal'].replace([True, False],
