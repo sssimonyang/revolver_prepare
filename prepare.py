@@ -25,12 +25,20 @@ def batch_split(func):
 
 
 def main():
-    patient_level = False
-    tumor_level = True
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-l",
+                        "--level",
+                        type=str,
+                        choices=['tumor', 'patient'])
+    parser.add_argument("-p", "--problem_remove", action="store_true")
+    parser.add_argument("-c", "--cluster_remove", action="store_true")
+    args = parser.parse_args()
+
     sample_split = False
     final_type_split = True
-    problem_remove = True
-    remove_unuseful_cluster = False
+    problem_remove = args.problem_remove
+    remove_unuseful_cluster = args.cluster_remove
 
     driver = ['TP53', 'ARID1A', 'RB1', 'PTEN', 'CTNNB1', 'ALB', 'AXIN1']
     # driver = 2
@@ -42,8 +50,8 @@ def main():
 
     curdir = os.path.abspath(os.curdir)
 
-    if patient_level:
-        workdir = f"patient_level_{str(len(driver)+len(cnv_arms)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'problem_remain'}_{'sample_split' if sample_split else 'sample_not_split'}"
+    if args.level == 'patient':
+        workdir = f"{args.level}_{str(len(driver)+len(cnv_arms)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}{'_problem_remove' if problem_remove else ''}{'_cluster_remove' if remove_unuseful_cluster else ''}{'_sample_split' if sample_split else ''}"
         if not os.path.exists(workdir):
             os.mkdir(workdir)
         os.chdir(workdir)
@@ -52,7 +60,7 @@ def main():
             "/public/home/wupin/project/1-liver-cancer/landscape-figure/5-within-liver-pyclone/pyclone-patient-level/3-pyclone-results"
         ]
         ccf = CCF(paths,
-                  level='patient_level',
+                  level='patient',
                   driver=driver,
                   cnv_arms=cnv_arms,
                   problem_remove=problem_remove,
@@ -62,8 +70,8 @@ def main():
         ccf.main()
         os.chdir(curdir)
 
-    if tumor_level:
-        workdir = f"tumor_level_{str(len(driver)+len(cnv_arms)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}_{'problem_remove' if problem_remove else 'problem_remain'}_{'sample_split' if sample_split else 'sample_not_split'}"
+    if args.level == 'tumor':
+        workdir = f"{args.level}_{str(len(driver)+len(cnv_arms)) +'_drivers' if isinstance(driver,list) else str(driver) +'_cut'}{'_problem_remove' if problem_remove else ''}{'_cluster_remove' if remove_unuseful_cluster else ''}{'_sample_split' if sample_split else ''}"
         if not os.path.exists(workdir):
             os.mkdir(workdir)
         os.chdir(workdir)
@@ -74,7 +82,7 @@ def main():
             "/public/home/wupin/project/1-liver-cancer/landscape-figure/5-within-liver-pyclone/3-pyclone-results"
         ]
         ccf = CCF(paths,
-                  level='tumor_level',
+                  level='tumor',
                   driver=driver,
                   cnv_arms=cnv_arms,
                   problem_remove=problem_remove,
@@ -102,8 +110,8 @@ class CCF:
                  sample_split=False,
                  final_type_split=False,
                  remove_unuseful_cluster=True,
-                 min_cluster_size=10,
-                 min_mutation_ccf=0.1,
+                 min_cluster_size=15,
+                 min_mutation_ccf=0.15,
                  min_cluster_ccf=0.1,
                  cnv_cut_value=0.5):
         self.paths = paths
@@ -130,11 +138,10 @@ class CCF:
         if self.problem_remove:
             self.problem_patients = [
                 'GWZY072',
-                'GWZY858729',
                 'GWZY048_PT',
                 'GWZY100_PT',
                 'GWZY121_PT',
-                'GWZY913925_PT1'  # , 'GWZY054_PT1'
+                'GWZY913925_PT1'
             ]
         else:
             self.problem_patients = []
@@ -143,7 +150,7 @@ class CCF:
         self.final_type_split = final_type_split
         self.remove_unuseful_cluster = remove_unuseful_cluster
 
-        if self.level == 'patient_level' and (not self.sample_split):
+        if self.level == 'patient' and (not self.sample_split):
             self.final_type_split = False
 
         self.min_cluster_size = min_cluster_size
@@ -212,6 +219,7 @@ class CCF:
     def single_patient(self, loci, samples_map):
         df = self.single(loci=loci, samples_map=samples_map)
         if df.empty:
+            print(f'{self.current_patient} have no remaing clusters')
             return
         df, cluster_info, removed_cluster = self.analyse_cluster(df)
         cluster_info_df = [[self.current_patient, cluster, *info]
@@ -482,15 +490,9 @@ class CCF:
                                     sort=False)
         cluster_info_df.sort_values(['patientID', 'cluster'], inplace=True)
 
-        cluster_info_df.to_csv(
-            f'cluster_info_{self.min_cluster_size}_{self.min_mutation_ccf}_{self.min_cluster_ccf}.csv',
-            index=False)
-        samples_info_df.to_csv(
-            f'samples_info_{self.min_cluster_size}_{self.min_mutation_ccf}_{self.min_cluster_ccf}.csv'
-        )
-        patient_info_df.to_csv(
-            f'patient_info_{self.min_cluster_size}_{self.min_mutation_ccf}_{self.min_cluster_ccf}.csv',
-            index=False)
+        cluster_info_df.to_csv(f'cluster_info.csv', index=False)
+        samples_info_df.to_csv(f'samples_info.csv')
+        patient_info_df.to_csv(f'patient_info.csv', index=False)
 
         df['cluster'] = df['cluster'].astype(str)
         assert df.groupby('patientID')['is.clonal'].any().all()
@@ -542,7 +544,7 @@ class CCF:
         out = out.copy()
 
         out.to_csv(
-            f"python_{self.min_cluster_size}_{self.min_mutation_ccf}_{self.min_cluster_ccf}_{category}_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.csv",
+            f"python_{self.level}_{category}_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.csv",
             index=False)
 
         df = out[out['is.driver']]
@@ -588,7 +590,7 @@ class CCF:
             'is.clonal', 'CCF'
         ]]
         out.to_csv(
-            f"R_{self.min_cluster_size}_{self.min_mutation_ccf}_{self.min_cluster_ccf}_{category}_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.csv",
+            f"{self.level}_{category}_{'list' if self.sepcified_driver else str(self.driver_cut)}_{drivers_num}_driver_genes.csv",
             index=False)
 
     @staticmethod
